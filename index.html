@@ -399,6 +399,19 @@
   .list-btn{background:transparent; color:var(--text);}
 
   .hidden{display:none !important;}
+
+  .credit{
+    position:fixed;
+    right:10px;
+    bottom:calc(10px + env(safe-area-inset-bottom));
+    font-family:var(--font-mono);
+    font-size:10px;
+    letter-spacing:.04em;
+    color:var(--text-muted);
+    opacity:.6;
+    pointer-events:none;
+    z-index:5;
+  }
 </style>
 </head>
 <body>
@@ -471,6 +484,8 @@
     </section>
   </main>
 </div>
+
+<div class="credit">Produced by Shimofuri</div>
 
 <script>
 const SCENARIOS = [
