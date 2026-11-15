@@ -782,6 +782,8 @@ let isListening = false;
 
 let stopListeningFn = null;
 
+const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+
 if(!SpeechRecognitionAPI){
   micBtn.classList.add('unsupported');
   micBtn.textContent = '🎤 この端末では音声認識が使えません';
@@ -866,6 +868,8 @@ if(!SpeechRecognitionAPI){
       practiceResult.className = 'practice-result show retry';
       practiceResult.textContent = '声が聞き取れませんでした。ボタンを押したらすぐに、はっきりと話しかけてみてください。';
     }
+    // 手動で画面を更新した場合にも続きから復帰できるよう、使うたびに状態を保存しておく
+    saveMicResumeState();
   };
 
   function startListening(){
@@ -914,11 +918,19 @@ if(!SpeechRecognitionAPI){
   micBtn.addEventListener('click', () => {
     if(isListening){
       finishListening();
+    } else if(usedOnce && IS_IOS){
+      // iOS Safariはページの読み込み直しだけでは音声認識エンジンの内部状態が
+      // リセットされないことが多いため、自動では読み込み直さず、
+      // 手動で画面を更新してもらうよう案内する(進行状況は保存済みなので復帰できる)
+      saveMicResumeState();
+      practiceResult.classList.add('show');
+      practiceResult.className = 'practice-result show retry';
+      practiceResult.textContent = 'iPhoneの仕様により、続けて発音練習をするには画面の更新が必要です。画面を上から下にスワイプするか、更新ボタンでページを読み込み直してから、もう一度お試しください(進行状況は保存されています)。';
     } else if(usedOnce){
       // 2回目以降は、音声認識エンジンをリセットするために読み込み直す。
-      // location.reload()は同一URLの再読み込みとみなされ、iOS Safariでは
-      // マイクまわりの内部状態が引き継がれてしまうことがあるため、
-      // クエリ文字列を変えた「別URLへの遷移」として読み込み直す。
+      // location.reload()は同一URLの再読み込みとみなされ、内部状態が
+      // 引き継がれてしまうことがあるため、クエリ文字列を変えた
+      // 「別URLへの遷移」として読み込み直す。
       saveMicResumeState();
       const cleanedSearch = location.search.replace(/[?&]_mic=\d+/, '');
       const sep = cleanedSearch ? '&' : '?';
