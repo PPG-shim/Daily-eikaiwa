@@ -915,9 +915,14 @@ if(!SpeechRecognitionAPI){
     if(isListening){
       finishListening();
     } else if(usedOnce){
-      // 2回目以降は、一度ページを再読み込みして音声認識エンジンをリセットしてから使う
+      // 2回目以降は、音声認識エンジンをリセットするために読み込み直す。
+      // location.reload()は同一URLの再読み込みとみなされ、iOS Safariでは
+      // マイクまわりの内部状態が引き継がれてしまうことがあるため、
+      // クエリ文字列を変えた「別URLへの遷移」として読み込み直す。
       saveMicResumeState();
-      location.reload();
+      const cleanedSearch = location.search.replace(/[?&]_mic=\d+/, '');
+      const sep = cleanedSearch ? '&' : '?';
+      location.href = location.pathname + cleanedSearch + sep + '_mic=' + Date.now() + location.hash;
     } else {
       startListening();
     }
