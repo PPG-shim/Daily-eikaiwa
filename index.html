@@ -618,7 +618,7 @@ const SCENARIOS = [
   }
 ];
 
-const state = { scenarioIdx:null, turnIdx:0, correctCount:0, answered:false, clearedIds:new Set() };
+const state = { scenarioIdx:null, turnIdx:0, correctCount:0, answered:false, selectedOptionIdx:null, clearedIds:new Set() };
 
 const listView = document.getElementById('listView');
 const quizView = document.getElementById('quizView');
@@ -649,6 +649,7 @@ function startScenario(idx){
   state.turnIdx = 0;
   state.correctCount = 0;
   state.answered = false;
+  state.selectedOptionIdx = null;
   listView.classList.add('hidden');
   resultView.classList.add('hidden');
   quizView.classList.remove('hidden');
@@ -796,6 +797,7 @@ if(!SpeechRecognitionAPI){
   let finalHeard = '';
   let gotSpeech = false;
   let cancelled = false;
+  let usedOnce = false;
   let silenceTimer = null;
   const SILENCE_STOP_MS = 1800; // 話し終わってからこの時間動きがなければ区切りとみなす
 
@@ -853,6 +855,7 @@ if(!SpeechRecognitionAPI){
     micBtn.classList.remove('listening');
     micBtn.textContent = '🎤 発音を練習する';
     if(cancelled){ cancelled = false; return; }
+    usedOnce = true;
     if(finalHeard){
       const sc = SCENARIOS[state.scenarioIdx];
       const turn = sc.turns[state.turnIdx];
@@ -911,6 +914,10 @@ if(!SpeechRecognitionAPI){
   micBtn.addEventListener('click', () => {
     if(isListening){
       finishListening();
+    } else if(usedOnce){
+      // 2回目以降は、一度ページを再読み込みして音声認識エンジンをリセットしてから使う
+      saveMicResumeState();
+      location.reload();
     } else {
       startListening();
     }
@@ -951,9 +958,69 @@ function resetPracticeBox(){
   }
 }
 
+/* ---------- iOSなどで2回目以降の音声認識が効かない対策 ----------
+   1回使った後は、現在の進行状況を保存してページを再読み込みし、
+   音声認識エンジンを「まっさらな初回」の状態に戻す。 */
+const MIC_RESUME_KEY = 'eikaiwaMicResume';
+
+function saveMicResumeState(){
+  try{
+    const data = {
+      scenarioIdx: state.scenarioIdx,
+      turnIdx: state.turnIdx,
+      correctCount: state.correctCount,
+      selectedOptionIdx: state.selectedOptionIdx,
+      clearedIds: Array.from(state.clearedIds),
+      practiceResultHTML: practiceResult.innerHTML,
+      practiceResultClassName: practiceResult.className
+    };
+    sessionStorage.setItem(MIC_RESUME_KEY, JSON.stringify(data));
+  }catch(e){}
+}
+
+function restoreMicResumeState(data){
+  state.scenarioIdx = data.scenarioIdx;
+  state.turnIdx = data.turnIdx;
+  state.correctCount = data.correctCount;
+  state.selectedOptionIdx = data.selectedOptionIdx;
+  state.answered = true;
+  state.clearedIds = new Set(data.clearedIds || []);
+
+  listView.classList.add('hidden');
+  resultView.classList.add('hidden');
+  quizView.classList.remove('hidden');
+
+  const sc = SCENARIOS[state.scenarioIdx];
+  document.getElementById('quizTitle').textContent = sc.emoji + '  ' + sc.name;
+  renderSpine();
+  renderTurn();
+
+  const turn = sc.turns[state.turnIdx];
+  const isCorrect = state.selectedOptionIdx === turn.correct;
+  document.querySelectorAll('.option').forEach((btn, idx) => {
+    btn.disabled = true;
+    if(idx === turn.correct) btn.classList.add('correct');
+    else if(idx === state.selectedOptionIdx) btn.classList.add('incorrect');
+  });
+  const fb = document.getElementById('feedbackBox');
+  fb.classList.add('show', isCorrect ? 'ok' : 'ng');
+  document.getElementById('feedbackHead').textContent = isCorrect ? '✓ その通り!' : '✕ 惜しい!';
+  document.getElementById('feedbackExplain').textContent = turn.explain;
+  const seg = document.getElementById('seg-'+state.turnIdx);
+  if(seg){ seg.classList.remove('active'); seg.classList.add(isCorrect ? 'done' : 'wrong'); }
+  document.getElementById('nextBtn').classList.add('show');
+
+  if(data.practiceResultHTML){
+    practiceResult.className = data.practiceResultClassName || 'practice-result show';
+    practiceResult.innerHTML = data.practiceResultHTML +
+      '<div style="margin-top:8px;opacity:.8;">🔄 マイクの準備をし直しました。続けて練習する場合はもう一度タップしてください。</div>';
+  }
+}
+
 function selectOption(i){
   if(state.answered) return;
   state.answered = true;
+  state.selectedOptionIdx = i;
   const sc = SCENARIOS[state.scenarioIdx];
   const turn = sc.turns[state.turnIdx];
   const options = document.querySelectorAll('.option');
@@ -1023,7 +1090,21 @@ function backToList(){
   renderList();
 }
 
-renderList();
+(function initView(){
+  let resumeData = null;
+  try{
+    const raw = sessionStorage.getItem(MIC_RESUME_KEY);
+    if(raw){
+      sessionStorage.removeItem(MIC_RESUME_KEY);
+      resumeData = JSON.parse(raw);
+    }
+  }catch(e){}
+  if(resumeData){
+    restoreMicResumeState(resumeData);
+  } else {
+    renderList();
+  }
+})();
 
 /* ---------- スマホの画面サイズに合わせた自動拡大縮小 ---------- */
 /* .app は常に内容どおりの自然な大きさで組み、画面に収まる倍率だけ scale で縮小する */
