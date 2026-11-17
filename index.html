@@ -350,21 +350,6 @@
   .practice-result.great{color:var(--correct);}
   .practice-result.okay{color:var(--accent-a);}
   .practice-result.retry{color:var(--incorrect);}
-  .mic-refresh-btn{
-    display:flex; align-items:center; justify-content:center; gap:8px;
-    width:100%;
-    margin-top:10px;
-    padding:clamp(11px,2.8vw,13px);
-    border-radius:12px;
-    border:1px solid var(--accent-b);
-    background:var(--accent-b);
-    color:#0F1B22;
-    font-family:var(--font-display);
-    font-weight:600;
-    font-size:clamp(13px,3.3vw,14.5px);
-    cursor:pointer;
-  }
-  .mic-refresh-btn:active{transform:scale(0.98);}
 
   .next-btn{
     margin-top:clamp(14px,3.6vw,18px);
@@ -797,24 +782,13 @@ let isListening = false;
 
 let stopListeningFn = null;
 
-const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
-
 if(!SpeechRecognitionAPI){
   micBtn.classList.add('unsupported');
   micBtn.textContent = '🎤 この端末では音声認識が使えません';
 } else {
-  // インスタンスを毎回作り直すとマイクの許可ポップアップが毎回出てしまうブラウザがあるため、
-  // 1つだけ作って使い回す。
-  recognition = new SpeechRecognitionAPI();
-  recognition.lang = 'en-US';
-  recognition.interimResults = true;
-  recognition.maxAlternatives = 1;
-  recognition.continuous = true; // 文と文の間の小さな間で打ち切られないようにする
-
   let finalHeard = '';
   let gotSpeech = false;
   let cancelled = false;
-  let usedOnce = false;
   let silenceTimer = null;
   const SILENCE_STOP_MS = 1800; // 話し終わってからこの時間動きがなければ区切りとみなす
 
@@ -825,67 +799,78 @@ if(!SpeechRecognitionAPI){
     clearSilenceTimer();
     silenceTimer = setTimeout(() => {
       if(isListening){
-        try{ recognition.stop(); }catch(e){}
+        try{ recognition.abort(); }catch(e){}
       }
     }, SILENCE_STOP_MS);
   }
 
-  recognition.onspeechstart = () => {
-    gotSpeech = true;
-    micBtn.textContent = '🎙️ 聞こえています...';
-    armSilenceTimer();
-  };
+  // iOS Safariでは同じインスタンスを使い回すと2回目以降が無反応になることがあるため、
+  // 発音練習をするたびに新しいインスタンスを作り直し、終了時もstop()ではなくabort()で
+  // 即座にオーディオセッションを解放する。
+  function createRecognition(){
+    const r = new SpeechRecognitionAPI();
+    r.lang = 'en-US';
+    r.interimResults = true;
+    r.maxAlternatives = 1;
+    r.continuous = true; // 文と文の間の小さな間で打ち切られないようにする
 
-  recognition.onresult = (e) => {
-    armSilenceTimer();
-    let interim = '';
-    for(let i = e.resultIndex; i < e.results.length; i++){
-      const transcript = e.results[i][0].transcript;
-      if(e.results[i].isFinal){
-        finalHeard = (finalHeard ? finalHeard + ' ' : '') + transcript.trim();
-      } else {
-        interim = transcript;
+    r.onspeechstart = () => {
+      gotSpeech = true;
+      micBtn.textContent = '🎙️ 聞こえています...';
+      armSilenceTimer();
+    };
+
+    r.onresult = (e) => {
+      armSilenceTimer();
+      let interim = '';
+      for(let i = e.resultIndex; i < e.results.length; i++){
+        const transcript = e.results[i][0].transcript;
+        if(e.results[i].isFinal){
+          finalHeard = (finalHeard ? finalHeard + ' ' : '') + transcript.trim();
+        } else {
+          interim = transcript;
+        }
       }
-    }
-    const shown = (finalHeard ? finalHeard + ' ' : '') + interim;
-    if(shown.trim()){
-      practiceResult.classList.add('show');
-      practiceResult.className = 'practice-result show';
-      practiceResult.innerHTML = `🎙️ 認識中… <span class="heard">"${shown.trim()}"</span>`;
-    }
-  };
-  recognition.onerror = (e) => {
-    if(cancelled || e.error === 'aborted') return;
-    practiceResult.classList.add('show');
-    practiceResult.className = 'practice-result show retry';
-    if(e.error === 'not-allowed' || e.error === 'service-not-allowed'){
-      practiceResult.textContent = 'マイクの使用が許可されていません。設定を確認してください。';
-    } else if(e.error === 'no-speech'){
-      practiceResult.textContent = '声が聞き取れませんでした。ボタンを押したらすぐに、はっきりと話しかけてみてください。';
-    } else {
-      practiceResult.textContent = '音声認識でエラーが発生しました。もう一度お試しください。';
-    }
-  };
-  recognition.onend = () => {
-    isListening = false;
-    clearSilenceTimer();
-    micBtn.classList.remove('listening');
-    micBtn.textContent = '🎤 発音を練習する';
-    if(cancelled){ cancelled = false; return; }
-    usedOnce = true;
-    if(finalHeard){
-      const sc = SCENARIOS[state.scenarioIdx];
-      const turn = sc.turns[state.turnIdx];
-      const target = turn.options[turn.correct];
-      showPracticeResult(finalHeard, target);
-    } else if(!gotSpeech){
+      const shown = (finalHeard ? finalHeard + ' ' : '') + interim;
+      if(shown.trim()){
+        practiceResult.classList.add('show');
+        practiceResult.className = 'practice-result show';
+        practiceResult.innerHTML = `🎙️ 認識中… <span class="heard">"${shown.trim()}"</span>`;
+      }
+    };
+    r.onerror = (e) => {
+      if(cancelled || e.error === 'aborted') return;
       practiceResult.classList.add('show');
       practiceResult.className = 'practice-result show retry';
-      practiceResult.textContent = '声が聞き取れませんでした。ボタンを押したらすぐに、はっきりと話しかけてみてください。';
-    }
-    // 手動で画面を更新した場合にも続きから復帰できるよう、使うたびに状態を保存しておく
-    saveMicResumeState();
-  };
+      if(e.error === 'not-allowed' || e.error === 'service-not-allowed'){
+        practiceResult.textContent = 'マイクの使用が許可されていません。設定を確認してください。';
+      } else if(e.error === 'no-speech'){
+        practiceResult.textContent = '声が聞き取れませんでした。ボタンを押したらすぐに、はっきりと話しかけてみてください。';
+      } else {
+        practiceResult.textContent = '音声認識でエラーが発生しました。もう一度お試しください。';
+      }
+    };
+    r.onend = () => {
+      isListening = false;
+      clearSilenceTimer();
+      micBtn.classList.remove('listening');
+      micBtn.textContent = '🎤 発音を練習する';
+      if(cancelled){ cancelled = false; return; }
+      if(finalHeard){
+        const sc = SCENARIOS[state.scenarioIdx];
+        const turn = sc.turns[state.turnIdx];
+        const target = turn.options[turn.correct];
+        showPracticeResult(finalHeard, target);
+      } else if(!gotSpeech){
+        practiceResult.classList.add('show');
+        practiceResult.className = 'practice-result show retry';
+        practiceResult.textContent = '声が聞き取れませんでした。ボタンを押したらすぐに、はっきりと話しかけてみてください。';
+      }
+      // 手動で画面を更新した場合にも続きから復帰できるよう、使うたびに状態を保存しておく
+      saveMicResumeState();
+    };
+    return r;
+  }
 
   function startListening(){
     // iOSのSpeechRecognitionはタップに同期して start() を呼ばないと動かないため、
@@ -896,6 +881,7 @@ if(!SpeechRecognitionAPI){
     finalHeard = '';
     gotSpeech = false;
     practiceResult.classList.remove('show');
+    recognition = createRecognition();
     try{
       recognition.start();
       isListening = true;
@@ -915,7 +901,7 @@ if(!SpeechRecognitionAPI){
   function finishListening(){
     clearSilenceTimer();
     if(isListening){
-      try{ recognition.stop(); }catch(e){}
+      try{ recognition.abort(); }catch(e){}
     }
   }
 
@@ -930,33 +916,9 @@ if(!SpeechRecognitionAPI){
   }
   stopListeningFn = cancelListening;
 
-  // 音声認識エンジンをリセットするための読み込み直し。
-  // location.reload()は同一URLの再読み込みとみなされ、内部状態が
-  // 引き継がれてしまうことがあるため、クエリ文字列を変えた
-  // 「別URLへの遷移」として読み込み直す。
-  function reloadForMic(){
-    const cleanedSearch = location.search.replace(/[?&]_mic=\d+/, '');
-    const sep = cleanedSearch ? '&' : '?';
-    location.href = location.pathname + cleanedSearch + sep + '_mic=' + Date.now() + location.hash;
-  }
-
   micBtn.addEventListener('click', () => {
     if(isListening){
       finishListening();
-    } else if(usedOnce && IS_IOS){
-      // iOS Safariは自動での読み込み直しだけでは音声認識エンジンの内部状態が
-      // リセットされないことが多いため、ユーザー自身にボタンをタップして
-      // 読み込み直してもらう(進行状況は保存済みなので復帰できる)
-      saveMicResumeState();
-      practiceResult.classList.add('show');
-      practiceResult.className = 'practice-result show retry';
-      practiceResult.innerHTML = 'iPhoneの仕様により、続けて発音練習をするには画面の更新が必要です。下のボタンをタップしてください(進行状況は保存されています)。' +
-        '<button type="button" id="micRefreshBtn" class="mic-refresh-btn">🔄 画面を更新する</button>';
-      const refreshBtn = document.getElementById('micRefreshBtn');
-      if(refreshBtn) refreshBtn.addEventListener('click', reloadForMic);
-    } else if(usedOnce){
-      saveMicResumeState();
-      reloadForMic();
     } else {
       startListening();
     }
