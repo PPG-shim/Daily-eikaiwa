@@ -350,6 +350,21 @@
   .practice-result.great{color:var(--correct);}
   .practice-result.okay{color:var(--accent-a);}
   .practice-result.retry{color:var(--incorrect);}
+  .mic-refresh-btn{
+    display:flex; align-items:center; justify-content:center; gap:8px;
+    width:100%;
+    margin-top:10px;
+    padding:clamp(11px,2.8vw,13px);
+    border-radius:12px;
+    border:1px solid var(--accent-b);
+    background:var(--accent-b);
+    color:#0F1B22;
+    font-family:var(--font-display);
+    font-weight:600;
+    font-size:clamp(13px,3.3vw,14.5px);
+    cursor:pointer;
+  }
+  .mic-refresh-btn:active{transform:scale(0.98);}
 
   .next-btn{
     margin-top:clamp(14px,3.6vw,18px);
@@ -915,26 +930,33 @@ if(!SpeechRecognitionAPI){
   }
   stopListeningFn = cancelListening;
 
+  // 音声認識エンジンをリセットするための読み込み直し。
+  // location.reload()は同一URLの再読み込みとみなされ、内部状態が
+  // 引き継がれてしまうことがあるため、クエリ文字列を変えた
+  // 「別URLへの遷移」として読み込み直す。
+  function reloadForMic(){
+    const cleanedSearch = location.search.replace(/[?&]_mic=\d+/, '');
+    const sep = cleanedSearch ? '&' : '?';
+    location.href = location.pathname + cleanedSearch + sep + '_mic=' + Date.now() + location.hash;
+  }
+
   micBtn.addEventListener('click', () => {
     if(isListening){
       finishListening();
     } else if(usedOnce && IS_IOS){
-      // iOS Safariはページの読み込み直しだけでは音声認識エンジンの内部状態が
-      // リセットされないことが多いため、自動では読み込み直さず、
-      // 手動で画面を更新してもらうよう案内する(進行状況は保存済みなので復帰できる)
+      // iOS Safariは自動での読み込み直しだけでは音声認識エンジンの内部状態が
+      // リセットされないことが多いため、ユーザー自身にボタンをタップして
+      // 読み込み直してもらう(進行状況は保存済みなので復帰できる)
       saveMicResumeState();
       practiceResult.classList.add('show');
       practiceResult.className = 'practice-result show retry';
-      practiceResult.textContent = 'iPhoneの仕様により、続けて発音練習をするには画面の更新が必要です。画面を上から下にスワイプするか、更新ボタンでページを読み込み直してから、もう一度お試しください(進行状況は保存されています)。';
+      practiceResult.innerHTML = 'iPhoneの仕様により、続けて発音練習をするには画面の更新が必要です。下のボタンをタップしてください(進行状況は保存されています)。' +
+        '<button type="button" id="micRefreshBtn" class="mic-refresh-btn">🔄 画面を更新する</button>';
+      const refreshBtn = document.getElementById('micRefreshBtn');
+      if(refreshBtn) refreshBtn.addEventListener('click', reloadForMic);
     } else if(usedOnce){
-      // 2回目以降は、音声認識エンジンをリセットするために読み込み直す。
-      // location.reload()は同一URLの再読み込みとみなされ、内部状態が
-      // 引き継がれてしまうことがあるため、クエリ文字列を変えた
-      // 「別URLへの遷移」として読み込み直す。
       saveMicResumeState();
-      const cleanedSearch = location.search.replace(/[?&]_mic=\d+/, '');
-      const sep = cleanedSearch ? '&' : '?';
-      location.href = location.pathname + cleanedSearch + sep + '_mic=' + Date.now() + location.hash;
+      reloadForMic();
     } else {
       startListening();
     }
