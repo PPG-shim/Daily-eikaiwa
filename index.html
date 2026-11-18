@@ -341,6 +341,7 @@
     display:none;
   }
   .practice-result.show{display:block;}
+  .mic-recovery{margin-top:10px;}
   .practice-result .heard{
     font-family:var(--font-mono);
     color:var(--text);
@@ -469,7 +470,8 @@
 
         <div class="practice-box" id="practiceBox">
           <button class="mic-btn" id="micBtn">🎤 発音を練習する</button>
-          <div class="practice-result" id="practiceResult"></div>
+          <div class="practice-result" id="practiceResult" aria-live="polite"></div>
+          <button class="mic-btn mic-recovery hidden" id="micRecoveryBtn">マイクを再準備する</button>
         </div>
       </div>
 
@@ -733,6 +735,7 @@ function setMicAvailableAfterTTS(available){
 
 function speakText(text, btn){
   if(!('speechSynthesis' in window)) return;
+  cancelListening();
   const doSpeak = () => {
     const utter = new SpeechSynthesisUtterance(text);
     utter.lang = 'en-US';
@@ -777,150 +780,153 @@ document.getElementById('answerSpeakBtn').addEventListener('click', () => {
 const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
 const micBtn = document.getElementById('micBtn');
 const practiceResult = document.getElementById('practiceResult');
+const micRecoveryBtn = document.getElementById('micRecoveryBtn');
+const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
+  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 let recognition = null;
-let isListening = false;
+let recognitionTimer = null;
+let stopRecognition = null;
 
-let stopListeningFn = null;
+function renderHeard(message, heard){
+  const span = document.createElement('span');
+  span.className = 'heard';
+  span.textContent = heard;
+  practiceResult.replaceChildren(message, span);
+}
+
+function showPracticeRetry(message, canRecover = false){
+  practiceResult.className = 'practice-result show retry';
+  practiceResult.textContent = message;
+  micRecoveryBtn.classList.toggle('hidden', !canRecover);
+}
+
+function resetRecognition(){
+  clearTimeout(recognitionTimer);
+  recognition = null;
+  stopRecognition = null;
+  micBtn.classList.remove('listening');
+  micBtn.textContent = '🎤 発音を練習する';
+}
+
+function cancelListening(){
+  const active = recognition;
+  if(!active) return;
+  resetRecognition();
+  active.abort();
+}
+
+function startListening(){
+  if(micBtn.disabled) return;
+  practiceResult.classList.remove('show');
+  micRecoveryBtn.classList.add('hidden');
+
+  // iPhoneでは一回の発話で自動終了する設定を使い、タップごとに認識を作り直す。
+  const active = new SpeechRecognitionAPI();
+  active.lang = 'en-US';
+  active.interimResults = true;
+  active.maxAlternatives = 1;
+  active.continuous = !isIOS;
+
+  const turn = SCENARIOS[state.scenarioIdx].turns[state.turnIdx];
+  let finalHeard = '';
+  let interimHeard = '';
+  let error = '';
+  let stopping = false;
+
+  function waitForEvent(timeout, callback){
+    clearTimeout(recognitionTimer);
+    recognitionTimer = setTimeout(() => {
+      if(recognition === active) callback();
+    }, timeout);
+  }
+
+  function complete(timedOut = false){
+    if(recognition !== active) return;
+    resetRecognition();
+    if(timedOut) active.abort();
+
+    const heard = finalHeard || interimHeard;
+    if(heard){
+      showPracticeResult(heard, turn.options[turn.correct]);
+    } else if(error === 'not-allowed' || error === 'service-not-allowed'){
+      showPracticeRetry('マイクを使用できません。ブラウザでこのサイトのマイクの使用を許可してください。');
+    } else if(timedOut){
+      showPracticeRetry('マイクから応答がありません。もう一度お試しください。', isIOS);
+    } else if(!error || error === 'no-speech'){
+      showPracticeRetry('声が聞き取れませんでした。ボタンを押したらすぐに、はっきりと話しかけてみてください。', isIOS);
+    } else {
+      showPracticeRetry('音声認識でエラーが発生しました。もう一度お試しください。', isIOS);
+    }
+    saveMicResumeState();
+  }
+
+  function stopWithResult(){
+    if(stopping || error) return;
+    stopping = true;
+    // stop()で確定結果を受け取る。終了通知が来ない場合だけ強制終了する。
+    waitForEvent(2500, () => complete(true));
+    active.stop();
+  }
+
+  active.onaudiostart = () => {
+    if(recognition !== active || stopping || error) return;
+    waitForEvent(10000, () => complete(true));
+  };
+  active.onspeechstart = () => {
+    if(recognition !== active || stopping || error) return;
+    micBtn.textContent = '🎙️ 聞こえています... (タップで停止)';
+    waitForEvent(10000, stopWithResult);
+  };
+  active.onresult = (event) => {
+    if(recognition !== active || error) return;
+    const results = Array.from(event.results);
+    finalHeard = results.filter(result => result.isFinal).map(result => result[0].transcript.trim()).join(' ');
+    interimHeard = results.filter(result => !result.isFinal).map(result => result[0].transcript.trim()).join(' ');
+    if(!stopping) waitForEvent(isIOS ? 3500 : 1800, stopWithResult);
+    const shown = [finalHeard, interimHeard].filter(Boolean).join(' ').trim();
+    if(shown){
+      practiceResult.className = 'practice-result show';
+      renderHeard('🎙️ 認識中… ', '"' + shown + '"');
+    }
+  };
+  active.onerror = (event) => {
+    if(recognition !== active) return;
+    error = event.error;
+    waitForEvent(1500, () => complete(true));
+  };
+  active.onend = () => complete();
+
+  // 許可ダイアログが出る場合も、start()はタップの処理内で直接呼ぶ。
+  recognition = active;
+  stopRecognition = stopWithResult;
+  micBtn.classList.add('listening');
+  micBtn.textContent = '🎙️ 聞き取り中... (タップで停止)';
+  waitForEvent(30000, () => complete(true));
+  try{
+    active.start();
+  }catch(e){
+    resetRecognition();
+    showPracticeRetry('マイクを開始できませんでした。もう一度お試しください。', isIOS);
+  }
+}
 
 if(!SpeechRecognitionAPI){
   micBtn.classList.add('unsupported');
+  micBtn.disabled = true;
   micBtn.textContent = '🎤 この端末では音声認識が使えません';
 } else {
-  let finalHeard = '';
-  let gotSpeech = false;
-  let cancelled = false;
-  let silenceTimer = null;
-  const SILENCE_STOP_MS = 1800; // 話し終わってからこの時間動きがなければ区切りとみなす
-
-  function clearSilenceTimer(){
-    if(silenceTimer){ clearTimeout(silenceTimer); silenceTimer = null; }
-  }
-  function armSilenceTimer(){
-    clearSilenceTimer();
-    silenceTimer = setTimeout(() => {
-      if(isListening){
-        try{ recognition.abort(); }catch(e){}
-      }
-    }, SILENCE_STOP_MS);
-  }
-
-  // iOS Safariでは同じインスタンスを使い回すと2回目以降が無反応になることがあるため、
-  // 発音練習をするたびに新しいインスタンスを作り直し、終了時もstop()ではなくabort()で
-  // 即座にオーディオセッションを解放する。
-  function createRecognition(){
-    const r = new SpeechRecognitionAPI();
-    r.lang = 'en-US';
-    r.interimResults = true;
-    r.maxAlternatives = 1;
-    r.continuous = true; // 文と文の間の小さな間で打ち切られないようにする
-
-    r.onspeechstart = () => {
-      gotSpeech = true;
-      micBtn.textContent = '🎙️ 聞こえています...';
-      armSilenceTimer();
-    };
-
-    r.onresult = (e) => {
-      armSilenceTimer();
-      let interim = '';
-      for(let i = e.resultIndex; i < e.results.length; i++){
-        const transcript = e.results[i][0].transcript;
-        if(e.results[i].isFinal){
-          finalHeard = (finalHeard ? finalHeard + ' ' : '') + transcript.trim();
-        } else {
-          interim = transcript;
-        }
-      }
-      const shown = (finalHeard ? finalHeard + ' ' : '') + interim;
-      if(shown.trim()){
-        practiceResult.classList.add('show');
-        practiceResult.className = 'practice-result show';
-        practiceResult.innerHTML = `🎙️ 認識中… <span class="heard">"${shown.trim()}"</span>`;
-      }
-    };
-    r.onerror = (e) => {
-      if(cancelled || e.error === 'aborted') return;
-      practiceResult.classList.add('show');
-      practiceResult.className = 'practice-result show retry';
-      if(e.error === 'not-allowed' || e.error === 'service-not-allowed'){
-        practiceResult.textContent = 'マイクの使用が許可されていません。設定を確認してください。';
-      } else if(e.error === 'no-speech'){
-        practiceResult.textContent = '声が聞き取れませんでした。ボタンを押したらすぐに、はっきりと話しかけてみてください。';
-      } else {
-        practiceResult.textContent = '音声認識でエラーが発生しました。もう一度お試しください。';
-      }
-    };
-    r.onend = () => {
-      isListening = false;
-      clearSilenceTimer();
-      micBtn.classList.remove('listening');
-      micBtn.textContent = '🎤 発音を練習する';
-      if(cancelled){ cancelled = false; return; }
-      if(finalHeard){
-        const sc = SCENARIOS[state.scenarioIdx];
-        const turn = sc.turns[state.turnIdx];
-        const target = turn.options[turn.correct];
-        showPracticeResult(finalHeard, target);
-      } else if(!gotSpeech){
-        practiceResult.classList.add('show');
-        practiceResult.className = 'practice-result show retry';
-        practiceResult.textContent = '声が聞き取れませんでした。ボタンを押したらすぐに、はっきりと話しかけてみてください。';
-      }
-      // 手動で画面を更新した場合にも続きから復帰できるよう、使うたびに状態を保存しておく
-      saveMicResumeState();
-    };
-    return r;
-  }
-
-  function startListening(){
-    // iOSのSpeechRecognitionはタップに同期して start() を呼ばないと動かないため、
-    // setTimeoutなどで開始を遅らせず、クリックハンドラの中で直接呼び出す
-    if(isListening || micBtn.disabled) return;
-    if('speechSynthesis' in window) window.speechSynthesis.cancel();
-    cancelled = false;
-    finalHeard = '';
-    gotSpeech = false;
-    practiceResult.classList.remove('show');
-    recognition = createRecognition();
-    try{
-      recognition.start();
-      isListening = true;
-      micBtn.classList.add('listening');
-      micBtn.textContent = '🎙️ 聞き取り中... (タップで停止)';
-    }catch(err){
-      isListening = false;
-      micBtn.classList.remove('listening');
-      micBtn.textContent = '🎤 発音を練習する';
-      practiceResult.classList.add('show');
-      practiceResult.className = 'practice-result show retry';
-      practiceResult.textContent = 'マイクを開始できませんでした。もう一度お試しください。';
-    }
-  }
-
-  // ユーザーが自分でボタンを押して止めた場合は、それまでに聞き取れた内容で判定する
-  function finishListening(){
-    clearSilenceTimer();
-    if(isListening){
-      try{ recognition.abort(); }catch(e){}
-    }
-  }
-
-  // ターン切り替えなど、結果を使わずに打ち切りたい場合
-  function cancelListening(){
-    clearSilenceTimer();
-    cancelled = true;
-    isListening = false;
-    micBtn.classList.remove('listening');
-    micBtn.textContent = '🎤 発音を練習する';
-    try{ recognition.abort(); }catch(e){}
-  }
-  stopListeningFn = cancelListening;
-
   micBtn.addEventListener('click', () => {
-    if(isListening){
-      finishListening();
+    if(recognition){
+      stopRecognition();
     } else {
       startListening();
+    }
+  });
+  micRecoveryBtn.addEventListener('click', () => {
+    if(saveMicResumeState()){
+      window.location.reload();
+    } else {
+      showPracticeRetry('進行状況を保存できませんでした。「発音を練習する」をもう一度お試しください。');
     }
   });
 }
@@ -943,25 +949,17 @@ function showPracticeResult(heard, target){
   else if(score >= 0.5){ cls='okay'; msg='👍 惜しい!もう一度聞いて練習してみましょう。'; }
   else { cls='retry'; msg='もう一度、正解の発音を聞いてから挑戦してみましょう。'; }
   practiceResult.className = 'practice-result show ' + cls;
-  practiceResult.innerHTML = msg + `<span class="heard">認識結果: "${heard}"</span>`;
+  renderHeard(msg, '認識結果: "' + heard + '"');
 }
 
 function resetPracticeBox(){
+  cancelListening();
+  micRecoveryBtn.classList.add('hidden');
   practiceResult.classList.remove('show');
   practiceResult.textContent = '';
-  if(isListening && stopListeningFn){
-    stopListeningFn();
-  }
-  isListening = false;
-  if(SpeechRecognitionAPI){
-    micBtn.classList.remove('listening');
-    micBtn.textContent = '🎤 発音を練習する';
-  }
 }
 
-/* ---------- iOSなどで2回目以降の音声認識が効かない対策 ----------
-   1回使った後は、現在の進行状況を保存してページを再読み込みし、
-   音声認識エンジンを「まっさらな初回」の状態に戻す。 */
+/* ---------- マイク再準備時の進行状況の保存と復元 ---------- */
 const MIC_RESUME_KEY = 'eikaiwaMicResume';
 
 function saveMicResumeState(){
@@ -972,11 +970,13 @@ function saveMicResumeState(){
       correctCount: state.correctCount,
       selectedOptionIdx: state.selectedOptionIdx,
       clearedIds: Array.from(state.clearedIds),
-      practiceResultHTML: practiceResult.innerHTML,
-      practiceResultClassName: practiceResult.className
+      practiceResultText: practiceResult.textContent
     };
     sessionStorage.setItem(MIC_RESUME_KEY, JSON.stringify(data));
-  }catch(e){}
+    return true;
+  }catch(e){
+    return false;
+  }
 }
 
 function restoreMicResumeState(data){
@@ -1011,11 +1011,11 @@ function restoreMicResumeState(data){
   if(seg){ seg.classList.remove('active'); seg.classList.add(isCorrect ? 'done' : 'wrong'); }
   document.getElementById('nextBtn').classList.add('show');
 
-  if(data.practiceResultHTML){
-    practiceResult.className = data.practiceResultClassName || 'practice-result show';
-    practiceResult.innerHTML = data.practiceResultHTML +
-      '<div style="margin-top:8px;opacity:.8;">🔄 マイクの準備をし直しました。続けて練習する場合はもう一度タップしてください。</div>';
-  }
+  practiceResult.className = 'practice-result show';
+  practiceResult.textContent = data.practiceResultText || '';
+  const hint = document.createElement('div');
+  hint.textContent = 'マイクを再準備しました。「発音を練習する」をタップしてください。';
+  practiceResult.append(hint);
 }
 
 function selectOption(i){
@@ -1057,6 +1057,7 @@ document.getElementById('nextBtn').addEventListener('click', () => {
 });
 
 function finishScenario(){
+  resetPracticeBox();
   const sc = SCENARIOS[state.scenarioIdx];
   quizView.classList.add('hidden');
   resultView.classList.remove('hidden');
@@ -1084,6 +1085,7 @@ document.getElementById('toListBtn').addEventListener('click', backToList);
 document.getElementById('backBtn').addEventListener('click', backToList);
 
 function backToList(){
+  resetPracticeBox();
   if('speechSynthesis' in window) window.speechSynthesis.cancel();
   quizView.classList.add('hidden');
   resultView.classList.add('hidden');
