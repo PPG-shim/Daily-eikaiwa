@@ -832,6 +832,7 @@ function startListening(){
   let interimHeard = '';
   let error = '';
   let stopping = false;
+  let timedOut = false;
 
   function waitForEvent(timeout, callback){
     clearTimeout(recognitionTimer);
@@ -840,10 +841,9 @@ function startListening(){
     }, timeout);
   }
 
-  function complete(timedOut = false){
+  function complete(){
     if(recognition !== active) return;
     resetRecognition();
-    if(timedOut) active.abort();
 
     const heard = finalHeard || interimHeard;
     if(heard){
@@ -860,17 +860,33 @@ function startListening(){
     saveMicResumeState();
   }
 
+  function abortAndRecover(){
+    if(recognition !== active) return;
+    timedOut = true;
+    stopping = true;
+    waitForEvent(1500, complete);
+    try{
+      active.abort();
+    }catch(e){
+      complete();
+    }
+  }
+
   function stopWithResult(){
     if(stopping || error) return;
     stopping = true;
     // stop()で確定結果を受け取る。終了通知が来ない場合だけ強制終了する。
-    waitForEvent(2500, () => complete(true));
-    active.stop();
+    waitForEvent(2500, abortAndRecover);
+    try{
+      active.stop();
+    }catch(e){
+      abortAndRecover();
+    }
   }
 
   active.onaudiostart = () => {
     if(recognition !== active || stopping || error) return;
-    waitForEvent(10000, () => complete(true));
+    waitForEvent(10000, abortAndRecover);
   };
   active.onspeechstart = () => {
     if(recognition !== active || stopping || error) return;
@@ -892,7 +908,7 @@ function startListening(){
   active.onerror = (event) => {
     if(recognition !== active) return;
     error = event.error;
-    waitForEvent(1500, () => complete(true));
+    waitForEvent(1500, abortAndRecover);
   };
   active.onend = () => complete();
 
@@ -901,7 +917,7 @@ function startListening(){
   stopRecognition = stopWithResult;
   micBtn.classList.add('listening');
   micBtn.textContent = '🎙️ 聞き取り中... (タップで停止)';
-  waitForEvent(30000, () => complete(true));
+  waitForEvent(30000, abortAndRecover);
   try{
     active.start();
   }catch(e){
