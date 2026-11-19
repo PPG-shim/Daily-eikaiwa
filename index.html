@@ -850,8 +850,19 @@ function startListening(){
       showPracticeResult(heard, turn.options[turn.correct]);
     } else if(error === 'not-allowed' || error === 'service-not-allowed'){
       showPracticeRetry('マイクを使用できません。ブラウザでこのサイトのマイクの使用を許可してください。');
+    } else if(error === 'audio-capture'){
+      showPracticeRetry('マイクを利用できません。Safariのマイク許可と、他のアプリがマイクを使用していないか確認してください。');
+    } else if(error === 'network'){
+      showPracticeRetry('音声認識サービスに接続できません。インターネット接続を確認して、もう一度お試しください。');
+    } else if(error === 'language-not-supported'){
+      showPracticeRetry('この端末では英語の音声認識を利用できません。SafariまたはiOSを更新してお試しください。');
     } else if(timedOut){
-      showPracticeRetry('マイクから応答がありません。もう一度お試しください。', isIOS);
+      showPracticeRetry(
+        isIOS
+          ? 'iPhoneのSafariから音声認識の応答がありません。ネット接続とSafariのマイク許可を確認し、続く場合はSafariを終了して開き直してください。'
+          : 'マイクから応答がありません。もう一度お試しください。',
+        isIOS
+      );
     } else if(!error || error === 'no-speech'){
       showPracticeRetry('声が聞き取れませんでした。ボタンを押したらすぐに、はっきりと話しかけてみてください。', isIOS);
     } else {
@@ -917,7 +928,7 @@ function startListening(){
   stopRecognition = stopWithResult;
   micBtn.classList.add('listening');
   micBtn.textContent = '🎙️ 聞き取り中... (タップで停止)';
-  waitForEvent(30000, abortAndRecover);
+  waitForEvent(isIOS ? 15000 : 30000, abortAndRecover);
   try{
     active.start();
   }catch(e){
