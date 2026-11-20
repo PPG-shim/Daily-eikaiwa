@@ -875,12 +875,12 @@ function startListening(){
     if(recognition !== active) return;
     timedOut = true;
     stopping = true;
-    waitForEvent(1500, complete);
     try{
       active.abort();
     }catch(e){
-      complete();
+      console.warn('Speech recognition abort failed during recovery.', e);
     }
+    complete();
   }
 
   function stopWithResult(){
@@ -919,7 +919,7 @@ function startListening(){
   active.onerror = (event) => {
     if(recognition !== active) return;
     error = event.error;
-    waitForEvent(1500, abortAndRecover);
+    waitForEvent(1500, complete);
   };
   active.onend = () => complete();
 
@@ -950,6 +950,7 @@ if(!SpeechRecognitionAPI){
     }
   });
   micRecoveryBtn.addEventListener('click', () => {
+    cancelListening();
     if(saveMicResumeState()){
       window.location.reload();
     } else {
